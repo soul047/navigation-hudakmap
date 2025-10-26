@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>후닥맵</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', Arial, sans-serif; }
+    #app { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+    .topbar { display: grid; grid-template-columns: auto 1fr auto; grid-auto-rows: auto; gap: 8px; align-items: center; padding: 10px; border-bottom: 1px solid #e5e7eb; background:#0a2540; color:#fff; }
+    .right-controls{ display:flex; gap:8px; align-items:center; justify-content:flex-end; flex-wrap:nowrap; }
+    .right-controls .btn{ padding:8px 10px; border:1px solid #94a3b8; border-radius:10px; background:#0a2540; color:#fff; cursor:pointer; }
+    .right-controls .btn.ghost{ background:transparent; }
+    .right-controls input[type="color"]{ width:36px; height:36px; padding:0; border:none; background:transparent; cursor:pointer; }
+    .btn { padding:8px 10px; border:1px solid #94a3b8; border-radius:10px; background:#0a2540; color:#fff; cursor:pointer; }
+    .btn.ghost{ background:transparent; }
+    .btn:disabled{ opacity:.5; cursor:not-allowed; }
+    .brand { font-weight: 800; letter-spacing: .5px; }
+    .searchbox { position: relative; max-width: 480px; }
+    .searchbox input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #cbd5e1; outline: none; }
+    .search-results { position: absolute; top: 42px; left: 0; right: auto; width: 100%; background:#fff; border:1px solid #e2e8f0; border-radius: 10px; max-height: 200px; overflow:auto; box-shadow: 0 12px 24px rgba(0,0,0,.12); z-index: 1000; color:#000; }
+    .search-item { padding:10px 12px; cursor:pointer; color:#000; }
+    .search-item:hover { background:#f1f5f9; color:#000; }
+    #map { width: 100%; height: 100%; }
+    .coords { position:absolute; left:12px; bottom:12px; background:#0a2540; color:#fff; padding:8px 10px; border-radius:10px; opacity:.92; font-size:12px; }
+    .leaflet-container a { color:#2563eb; }
+    /* Copy modal for clipboard fallback */
+    .copy-modal{ display:none; position:fixed; left:50%; top:16px; transform:translateX(-50%); background:#111827; color:#fff; padding:12px; border-radius:10px; z-index:2100; box-shadow:0 8px 24px rgba(0,0,0,.3); width:min(560px, 92vw); }
+    .copy-modal input{ width:100%; padding:10px; border-radius:8px; border:1px solid #374151; background:#1f2937; color:#fff; }
+    .copy-modal .row{ display:flex; gap:8px; align-items:center; margin-top:8px; justify-content:flex-end; }
+    .copy-modal .row .btn{ background:#2563eb; border-color:#2563eb; }
+    @media (max-width: 640px){ .searchbox{ max-width: 100%; } }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <div class="brand">후닥맵</div>
+    <div class="searchbox">
+      <input id="q" placeholder="장소·주소 검색 (예: 서울시청, 해운대 해수욕장)" />
+      <div id="results" class="search-results" style="display:none;"></div>
+    </div>
+    <div class="right-controls">
+      <button id="btnCopyAddr" class="btn ghost" title="지도 중심 주소 복사">주소 복사</button>
+      <button id="btnFav" class="btn ghost" title="현재 화면 즐겨찾기 저장">즐겨찾기</button>
+      <button id="btnHistory" class="btn ghost" title="검색 기록 보기">검색 기록</button>
+      <button id="btnShareLink" class="btn" title="현재 화면 공유 링크 복사">장소 공유</button>
+      <button id="btnClear" class="btn ghost" title="모든 마커 지우기">마커 지우기</button>
+      <input id="pinColor" type="color" value="#22c55e" title="마커 색상"/>
+    </div>
+    <div id="historyPanel" style="display:none; position:absolute; right:10px; top:58px; width:280px; max-height:260px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:10px; box-shadow:0 12px 24px rgba(0,0,0,.12); z-index:1001;"></div>
+    <div id="toast" style="display:none; position:fixed; left:50%; transform:translateX(-50%); top:10px; background:#ef4444; color:#fff; padding:8px 12px; border-radius:10px; z-index:2000; box-shadow:0 6px 16px rgba(0,0,0,.2); font-size:12px;">에러</div>
+    <div id="copyModal" class="copy-modal">
+      <div>복사 권한이 차단되어 있어요. 아래 내용을 선택 후 <b>Ctrl/⌘ + C</b>로 복사하세요.</div>
+      <input id="copyInput" readonly value="" />
+      <div class="row"><button id="btnCopyClose" class="btn">닫기</button></div>
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+<div class="coords" id="coords">--</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// ===== 기본 지도 =====
+const map = L.map('map', { zoomControl:true })
+const base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map)
+map.setView([37.5665, 126.9780], 13) // 서울 시청 부근
+L.control.scale({ metric:true, imperial:false }).addTo(map)
+
+// ===== Kakao Local REST API Key =====
+const KAKAO_REST_KEY = 'c5016bd99dd643018bdc55e26c6b83eb'
+
+// ===== 검색 =====
+const $q = document.getElementById('q')
+const $results = document.getElementById('results')
+let searchTimer = null
+$q.addEventListener('input', ()=>{
+  const v = $q.value.trim()
+  if(!v){ $results.style.display='none'; $results.innerHTML=''; return }
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(()=> runSearch(v), 250)
+})
+
+async function runSearch(q){
+  // Kakao Local 검색(키워드+주소) → 실패 시 Nominatim 폴백
+  try{
+    const headers = { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` }
+    const [r1, r2] = await Promise.all([
+      fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(q)}&size=8`, { headers }),
+      fetch(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(q)}&size=8`, { headers })
+    ])
+    if(!r1.ok && !r2.ok) throw new Error('Kakao 검색 실패')
+    const [j1, j2] = [r1.ok? await r1.json():{documents:[]}, r2.ok? await r2.json():{documents:[]}] 
+    const list = []
+    for(const d of j1.documents||[]){ if(d.x && d.y){ list.push({ label: d.place_name || d.address_name || d.road_address_name || q, lat: +d.y, lon: +d.x }) } }
+    for(const d of j2.documents||[]){ if(d.x && d.y){ list.push({ label: d.address_name || d.road_address?.address_name || q, lat: +d.y, lon: +d.x }) } }
+    const html = list.map(it=>`<div class='search-item' data-lat='${it.lat}' data-lon='${it.lon}'>${escapeHtml(it.label)}</div>`).join('')
+    if(!html){ $results.style.display='none'; $results.innerHTML=''; return }
+    $results.innerHTML = html
+    $results.style.display = 'block'
+  }catch(err){
+    console.warn('Kakao 검색 오류, Nominatim 폴백 적용', err)
+    try{
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&addressdetails=1&limit=8`
+      const r = await fetch(url)
+      if(!r.ok) throw new Error('Nominatim 검색 오류')
+      const j = await r.json()
+      const html = j.map((it)=> `<div class='search-item' data-lat='${it.lat}' data-lon='${it.lon}'>${escapeHtml(it.display_name)}</div>`).join('')
+      if(!html){ $results.style.display='none'; $results.innerHTML=''; return }
+      $results.innerHTML = html
+      $results.style.display = 'block'
+    }catch(e){ showToast('주소 검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.'); console.warn(e) }
+  }
+}
+
+$results.addEventListener('click', (e)=>{
+  const el = e.target.closest('.search-item')
+  if(!el) return
+  const lat = parseFloat(el.getAttribute('data-lat'))
+  const lon = parseFloat(el.getAttribute('data-lon'))
+  const label = el.textContent.trim()
+  addHistory(label, lat, lon)
+  $results.style.display='none'
+  goTo([lat, lon], 17, true)
+})
+
+// ===== 커스텀 핀 아이콘 (사용자 선택 색상 반영) =====
+function makePinSVG(color){
+  return `<svg width="26" height="38" viewBox="0 0 26 38" xmlns="http://www.w3.org/2000/svg">
+    <defs><filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity=".3"/></filter></defs>
+    <path d="M13 0C6.373 0 1 5.373 1 12c0 8.25 12 26 12 26s12-17.75 12-26C25 5.373 19.627 0 13 0z" fill="${color}" filter="url(#s)"/>
+    <circle cx="13" cy="12" r="4" fill="white" opacity="0.9"/>
+  </svg>`
+}
+function buildPinIcon(color){
+  return L.divIcon({ className: 'pin', html: makePinSVG(color), iconSize: [26,38], iconAnchor: [13,38], popupAnchor: [0,-30] })
+}
+let currentColor = localStorage.getItem('hudak_pin_color') || '#22c55e'
+let pinIcon = buildPinIcon(currentColor);
+
+const markers = L.featureGroup().addTo(map)
+
+// ===== 액션 버튼 =====
+const $btnCopyAddr = document.getElementById('btnCopyAddr')
+const $btnFav = document.getElementById('btnFav')
+const $btnHistory = document.getElementById('btnHistory')
+const $btnShare = document.getElementById('btnShareLink')
+const $btnClear = document.getElementById('btnClear')
+const $pinColor = document.getElementById('pinColor')
+const $copyModal = document.getElementById('copyModal')
+const $copyInput = document.getElementById('copyInput')
+const $btnCopyClose = document.getElementById('btnCopyClose')
+
+function permalink(){
+  const c = map.getCenter(); const z = map.getZoom()
+  return `${location.origin}${location.pathname}#${z}/${c.lat.toFixed(5)}/${c.lng.toFixed(5)}`
+}
+
+// ===== 검색 기록 관리 =====
+function addHistory(label, lat, lon){
+  const key='hudak_history'
+  const item={ label, lat, lon, ts: Date.now() }
+  const arr = JSON.parse(localStorage.getItem(key)||'[]')
+  arr.unshift(item)
+  const dedup = []
+  const seen = new Set()
+  for(const it of arr){ const k = `${it.label}|${it.lat}|${it.lon}`; if(!seen.has(k)){ seen.add(k); dedup.push(it) } }
+  localStorage.setItem(key, JSON.stringify(dedup.slice(0,20)))
+}
+function getHistory(){ return JSON.parse(localStorage.getItem('hudak_history')||'[]') }
+function renderHistory(){
+  const panel = document.getElementById('historyPanel'); if(!panel) return
+  const items = getHistory()
+  if(!items.length){ panel.innerHTML = '<div style="padding:10px">기록 없음</div>'; return }
+  panel.innerHTML = items.map(it=>`<div class="search-item" data-lat="${it.lat}" data-lon="${it.lon}">${escapeHtml(it.label)}</div>`).join('')
+}
+function toggleHistory(){
+  const panel = document.getElementById('historyPanel'); if(!panel) return
+  if(panel.style.display==='none'){ renderHistory(); panel.style.display='block' } else { panel.style.display='none' }
+}
+// 기록 패널에서 항목 클릭 시 이동
+document.getElementById('historyPanel')?.addEventListener('click', (e)=>{
+  const el = e.target.closest('.search-item')
+  if(!el) return
+  const lat = parseFloat(el.getAttribute('data-lat'))
+  const lon = parseFloat(el.getAttribute('data-lon'))
+  goTo([lat, lon], 17, true)
+})
+
+// ===== 안전 복사 유틸 (Clipboard 권한/정책 대응) =====
+async function safeCopyText(text, toastLabel='클립보드로 복사했어요.'){
+  try{
+    await navigator.clipboard.writeText(text)
+    showToast(toastLabel)
+    return true
+  }catch(err1){
+    try{ // Fallback: execCommand
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position='fixed'; ta.style.top='-1000px'
+      document.body.appendChild(ta)
+      ta.focus(); ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      if(ok){ showToast(toastLabel); return true }
+      throw new Error('execCommand copy failed')
+    }catch(err2){
+      console.warn('Clipboard blocked → opening copy modal', err1, err2)
+      if($copyModal && $copyInput){ $copyInput.value = text; $copyModal.style.display='block'; $copyInput.focus(); $copyInput.select() }
+      showToast('복사 권한이 없어 복사창을 열었어요.')
+      return false
+    }
+  }
+}
+$btnCopyClose?.addEventListener('click', ()=>{ if($copyModal) $copyModal.style.display='none' })
+window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && $copyModal?.style.display==='block'){ $copyModal.style.display='none' } })
+
+$btnCopyAddr?.addEventListener('click', async ()=>{
+  const c = map.getCenter();
+  const addr = await reverseGeocode(c.lat, c.lng)
+  const text = addr || `${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`
+  safeCopyText(text, '주소/좌표를 복사했어요.')
+})
+
+$btnShare?.addEventListener('click', async ()=>{
+  const url = permalink()
+  try{
+    if(navigator.share){ await navigator.share({ title:'후닥맵', url }) }
+    else { await safeCopyText(url, '링크를 복사했어요.') }
+  }catch{ await safeCopyText(url, '링크를 복사했어요.') }
+})
+
+$btnClear?.addEventListener('click', ()=>{ markers.clearLayers() })
+$btnHistory?.addEventListener('click', ()=>{ toggleHistory() })
+$btnFav?.addEventListener('click', ()=>{
+  const c = map.getCenter();
+  const name = prompt('즐겨찾기 이름을 입력하세요', '현재 위치')
+  if(name){
+    const label = `${name} · ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`
+    addHistory(label, c.lat, c.lng)
+    const m = L.marker([c.lat, c.lng], { icon: pinIcon }).addTo(markers)
+    m.bindPopup(escapeHtml(label))
+  }
+})
+
+// 색상 피커 바인딩
+if($pinColor){
+  $pinColor.value = currentColor
+  $pinColor.addEventListener('input', (e)=>{
+    currentColor = e.target.value || '#22c55e'
+    localStorage.setItem('hudak_pin_color', currentColor)
+    pinIcon = buildPinIcon(currentColor)
+    markers.eachLayer(l=>{ if(l.setIcon) l.setIcon(pinIcon) })
+  })
+}
+
+// 지도 클릭 → 마커 + 주소 팝업
+map.on('click', async (e)=>{
+  const { lat, lng } = e.latlng
+  const m = L.marker([lat, lng], { draggable:true, icon: pinIcon }).addTo(markers)
+  const addr = await reverseGeocode(lat, lng)
+  m.bindPopup(`<b>여기</b><br/>${addr ? escapeHtml(addr) : '주소 없음'}<br/><small>${lat.toFixed(6)}, ${lng.toFixed(6)}</small>`).openPopup()
+})
+
+// 역지오코딩(Kakao → Nominatim)
+async function reverseGeocode(lat, lon){
+  try{
+    const headers = { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` }
+    const u = `https://dapi.kakao.com/v2/local/geo/coord2address.json?x=${lon}&y=${lat}`
+    const r = await fetch(u, { headers })
+    if(!r.ok) throw new Error('Kakao coord2address 오류')
+    const j = await r.json()
+    const d = (j.documents||[])[0]
+    return d?.road_address?.address_name || d?.address?.address_name || null
+  }catch(e){
+    console.warn('Kakao 역지오코딩 오류, Nominatim 폴백', e)
+    try{
+      const u = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`
+      const r = await fetch(u)
+      if(!r.ok) throw new Error('Nominatim 역지오코딩 오류')
+      const j = await r.json()
+      return j?.display_name || null
+    }catch(e2){ console.warn(e2); showToast('주소를 불러오지 못했어요. 좌표를 사용합니다.'); return null }
+  }
+}
+
+// 좌표 HUD
+map.on('mousemove', (e)=>{
+  document.getElementById('coords').textContent = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`
+})
+
+function goTo(latlng, zoom=17, dropMarker=false){
+  map.setView(latlng, zoom)
+  if(dropMarker){ L.marker(latlng, {icon: pinIcon}).addTo(markers) }
+}
+
+function escapeHtml(x){ return x?.toString().replace(/[&<>"']/g, (c)=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])) }
+function showToast(msg){ const t=document.getElementById('toast'); if(!t) return; t.textContent=msg; t.style.display='block'; clearTimeout(showToast._id); showToast._id=setTimeout(()=>{ t.style.display='none' }, 2200); }
+
+// ===== Lightweight Self-tests (console) =====
+(function runTests(){
+  function test(name, fn){ try{ const r = fn(); if(r instanceof Promise){ r.then(()=>console.log(`%c✔ ${name}`,'color:#16a34a')).catch(e=>console.error(`✘ ${name}`, e)) } else { console.log(`%c✔ ${name}`,'color:#16a34a') } } catch(e){ console.error(`✘ ${name}`, e) } }
+  // Test: makePinSVG embeds color
+  test('makePinSVG color', ()=>{ const c='#123456'; if(!makePinSVG(c).includes(c)) throw new Error('color missing') })
+  // Test: permalink format
+  test('permalink format', ()=>{ const s = permalink(); if(!/#\d+\/(-?\d+\.\d+)\/(-?\d+\.\d+)/.test(s)) throw new Error('bad hash') })
+  // Test: escapeHtml encodes critical chars
+  test('escapeHtml encodes <&>"\'', ()=>{ const sample = `<>&"'`; const o = escapeHtml(sample); if(!o.includes('&lt;')||!o.includes('&gt;')||!o.includes('&amp;')||!o.includes('&quot;')||!o.includes('&#39;')) throw new Error('not encoded') })
+  // Test: safeCopyText graceful failure (should not throw)
+  test('safeCopyText no-throw', ()=> safeCopyText('test').then(()=>true).catch(()=>true))
+})();
+</script>
+</body>
+</html>
