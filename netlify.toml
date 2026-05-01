@@ -1,15 +1,2 @@
 [build]
-  command = "npm run build"
-  publish = "dist"
-
-[context.production]
-  # main → hudakmap.netlify.app
-  environment = { NODE_ENV = "production", VITE_API_BASE = "https://api.prod.example.com" }
-
-[context.branch-deploy]
-  # 모든 브랜치 deploy (예: dev--hudakmap.netlify.app)
-  environment = { NODE_ENV = "development", VITE_API_BASE = "https://api.dev.example.com" }
-
-[context.deploy-preview]
-  # PR용 미리보기 (deploy-preview-###)
-  environment = { NODE_ENV = "staging", VITE_API_BASE = "https://api.staging.example.com" }
+  publish = "."
